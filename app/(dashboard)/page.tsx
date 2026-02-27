@@ -1,4 +1,4 @@
-import LinesPastePanel from '@/components/LinesPastePanel';
+export const dynamic = "force-dynamic";import LinesPastePanel from '@/components/LinesPastePanel';
 import AvailableMarkets from '@/components/AvailableMarkets';
 import HoleMapMock from '@/components/HoleMapMock';
 
