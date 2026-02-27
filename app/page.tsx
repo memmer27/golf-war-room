@@ -1,2 +1,2 @@
-import Dashboard from './(dashboard)/page';
+export const dynamic = "force-dynamic";import Dashboard from './(dashboard)/page';
 export default Dashboard;
