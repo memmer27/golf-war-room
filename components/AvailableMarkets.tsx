@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 
 const ALL = [
@@ -12,13 +13,16 @@ const ALL = [
   { key: 'Birdies or Better Matchup', label: 'Matchups' }
 ] as const;
 
-function getQueryParam(name: string): string | null {
-  if (typeof window === 'undefined') return null;
-  const u = new URL(window.location.href);
-  return u.searchParams.get(name);
-}
-
 export default function AvailableMarkets() {
+  const searchParams = useSearchParams();
+
+  const event_id = searchParams.get('event_id') || '';
+  const yearStr = searchParams.get('year') || '';
+  const roundStr = searchParams.get('round') || '';
+
+  const year = yearStr ? Number(yearStr) : NaN;
+  const round = roundStr ? Number(roundStr) : NaN;
+
   const [active, setActive] = useState<string>(ALL[0].key);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [note, setNote] = useState<string>('');
@@ -29,47 +33,42 @@ export default function AvailableMarkets() {
     return createClient(url, anon);
   }, []);
 
-  useEffect(() => {
-    const event_id = getQueryParam('event_id') || '';
-    const yearStr = getQueryParam('year') || '';
-    const roundStr = getQueryParam('round') || '';
+  async function loadCounts(eid: string, y: number, r: number) {
+    setNote(`Loading counts for ${eid} ${y} RD${r}…`);
 
-    if (!event_id || !yearStr || !roundStr) {
-      setNote('Tip: add ?event_id=cognizant&year=2026&round=2 to the URL to load counts (we will automate this next).');
+    const { data, error } = await supabase
+      .from('lines')
+      .select('market')
+      .eq('event_id', eid)
+      .eq('year', y)
+      .eq('round', r);
+
+    if (error) {
       setCounts({});
+      setNote(`⚠ Error loading counts: ${error.message}`);
       return;
     }
 
-    const year = Number(yearStr);
-    const round = Number(roundStr);
-
-    async function loadCounts() {
-      setNote(`Loading counts for ${event_id} ${year} RD${round}…`);
-      const { data, error } = await supabase
-        .from('lines')
-        .select('market', { count: 'exact', head: false })
-        .eq('event_id', event_id)
-        .eq('year', year)
-        .eq('round', round);
-
-      if (error) {
-        setNote(`⚠ Error loading counts: ${error.message}`);
-        setCounts({});
-        return;
-      }
-
-      // data is rows; count is not grouped, so we group manually
-      const grouped: Record<string, number> = {};
-      for (const row of (data ?? []) as any[]) {
-        const m = row.market as string;
-        grouped[m] = (grouped[m] ?? 0) + 1;
-      }
-      setCounts(grouped);
-      setNote(`Counts loaded for ${event_id} ${year} RD${round}.`);
+    const grouped: Record<string, number> = {};
+    for (const row of (data ?? []) as any[]) {
+      const m = row.market as string;
+      grouped[m] = (grouped[m] ?? 0) + 1;
     }
 
-    loadCounts();
-  }, [supabase]);
+    setCounts(grouped);
+    setNote(`Counts loaded for ${eid} ${y} RD${r}.`);
+  }
+
+  // ✅ Re-run whenever event/year/round in the URL changes
+  useEffect(() => {
+    if (!event_id || !Number.isFinite(year) || !Number.isFinite(round)) {
+      setCounts({});
+      setNote('Paste + Save a board to set event/year/round automatically.');
+      return;
+    }
+    loadCounts(event_id, year, round);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event_id, yearStr, roundStr, supabase]);
 
   return (
     <div className="card">
@@ -91,8 +90,15 @@ export default function AvailableMarkets() {
         })}
       </div>
 
-      <div className="small" style={{ marginTop: 10 }}>
-        {note}
+      <div className="small" style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+        <span>{note}</span>
+
+        {/* Manual refresh button (handy if you ever want to re-check without reload) */}
+        {event_id && Number.isFinite(year) && Number.isFinite(round) && (
+          <button className="btn" onClick={() => loadCounts(event_id, year, round)}>
+            Refresh
+          </button>
+        )}
       </div>
     </div>
   );
