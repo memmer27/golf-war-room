@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 type ParsedRow = {
   player: string;
   opponent?: string;
-  tee_time?: string; // e.g. "Fri 6:21am"
+  tee_time?: string;
   round?: number;
   line: number;
   market: string;
@@ -25,6 +25,17 @@ function safeNum(v: any, fallback: number) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function mostCommonRound(rows: ParsedRow[]): number | null {
+  const counts: Record<number, number> = {};
+  for (const r of rows) {
+    if (!r.round) continue;
+    counts[r.round] = (counts[r.round] ?? 0) + 1;
+  }
+  const entries = Object.entries(counts).map(([k, v]) => [Number(k), v] as const);
+  entries.sort((a, b) => b[1] - a[1]);
+  return entries.length ? entries[0][0] : null;
+}
+
 export default function LinesPastePanel() {
   const [market, setMarket] = useState(MARKETS[0].key);
   const [raw, setRaw] = useState('');
@@ -33,7 +44,6 @@ export default function LinesPastePanel() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string>('');
 
-  // Temporary manual keys (we'll wire event dropdown later)
   const [eventId, setEventId] = useState('cognizant');
   const [year, setYear] = useState<number>(new Date().getFullYear());
   const [round, setRound] = useState<number>(2);
@@ -73,9 +83,6 @@ Trending
     setErrors([]);
     setStatus('');
     try {
-      // Keep URL in sync so AvailableMarkets can load counts without manual URL edits
-      syncUrl();
-
       // 1) Parse
       const res = await fetch('/api/lines/parse', {
         method: 'POST',
@@ -94,14 +101,24 @@ Trending
         return;
       }
 
-      // 2) Save to Supabase (server-side)
+      // 2) Detect round from pasted text (if present) and use it for saving + URL
+      const detected = mostCommonRound(parsedRows);
+      const effectiveRound = detected ?? round;
+
+      if (detected && detected !== round) {
+        setRound(detected);
+      }
+
+      syncUrl({ round: effectiveRound });
+
+      // 3) Save
       const saveRes = await fetch('/api/lines/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           event_id: eventId,
           year,
-          round,
+          round: effectiveRound,
           market,
           rows: parsedRows,
           source: 'prizepicks'
@@ -111,10 +128,8 @@ Trending
       const saveJson = await saveRes.json();
       if (!saveRes.ok) throw new Error(saveJson?.error ?? 'Save failed');
 
-      setStatus(`✅ Saved ${saveJson.saved ?? parsedRows.length} rows for ${eventId} ${year} RD${round} (${market}).`);
-
-      // Sync URL again (no harm) and allow AvailableMarkets to refresh on reload instantly
-      syncUrl();
+      setStatus(`✅ Saved ${saveJson.saved ?? parsedRows.length} rows for ${eventId} ${year} RD${effectiveRound} (${market}).`);
+      syncUrl({ round: effectiveRound });
     } catch (e: any) {
       setStatus('');
       setErrors([String(e?.message ?? e)]);
@@ -125,7 +140,6 @@ Trending
 
   return (
     <div style={{ marginTop: 12 }}>
-      {/* Event/Year/Round (temporary manual inputs) */}
       <div className="row" style={{ marginBottom: 10 }}>
         <div style={{ flex: 1, minWidth: 220 }}>
           <div className="label">Event ID (temp)</div>
@@ -169,7 +183,6 @@ Trending
         </div>
       </div>
 
-      {/* Market + Buttons */}
       <div className="row">
         <div style={{ flex: 1, minWidth: 240 }}>
           <div className="label">Market</div>
