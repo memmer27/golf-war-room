@@ -25,7 +25,6 @@ function parseCSV(text: string): { headers: string[]; rows: string[][] } {
   };
 
   const pushRow = () => {
-    // ignore totally empty trailing rows
     if (row.length === 1 && row[0] === "") return;
     rows.push(row);
     row = [];
@@ -36,7 +35,6 @@ function parseCSV(text: string): { headers: string[]; rows: string[][] } {
 
     if (inQuotes) {
       if (c === '"') {
-        // escaped quote "" inside quoted field
         if (text[i + 1] === '"') {
           field += '"';
           i++;
@@ -65,14 +63,11 @@ function parseCSV(text: string): { headers: string[]; rows: string[][] } {
       continue;
     }
 
-    if (c === "\r") {
-      continue;
-    }
+    if (c === "\r") continue;
 
     field += c;
   }
 
-  // flush last field/row
   pushField();
   pushRow();
 
@@ -82,13 +77,10 @@ function parseCSV(text: string): { headers: string[]; rows: string[][] } {
 
 function normName(s: string) {
   let x = (s || "").trim();
-
-  // Convert "Last, First" -> "First Last"
   if (x.includes(",")) {
     const [last, first] = x.split(",").map((p) => p.trim());
     if (first && last) x = `${first} ${last}`;
   }
-
   return x
     .toLowerCase()
     .replace(/\./g, "")
@@ -114,7 +106,6 @@ async function fetchDGSkillRatings(): Promise<DGSkillRow[]> {
 
   const text = await res.text();
   const { headers, rows } = parseCSV(text);
-
   if (!headers.length || rows.length === 0) return [];
 
   return rows.map((cols) => {
@@ -122,6 +113,13 @@ async function fetchDGSkillRatings(): Promise<DGSkillRow[]> {
     headers.forEach((h, i) => (obj[h] = (cols[i] ?? "").trim()));
     return obj;
   });
+}
+
+function strokesProjFromSgTotal(sgTotal: number | null): number | null {
+  if (sgTotal === null) return null;
+  // Simple v1 mapping: better SG total -> lower expected strokes.
+  // PGA National par 71 baseline.
+  return 71 - sgTotal * 0.35;
 }
 
 export default async function EdgesPage({
@@ -152,10 +150,8 @@ export default async function EdgesPage({
 
   const rows: LineRow[] = (data ?? []) as LineRow[];
 
-  // Build lookup by normalized player name
   const dgByName = new Map<string, DGSkillRow>();
   for (const r of dgRows) {
-    // DG feed header is typically "player_name"
     const name = r.player_name || r.name || "";
     if (!name) continue;
     dgByName.set(normName(name), r);
@@ -169,7 +165,7 @@ export default async function EdgesPage({
         <div>
           <h1 style={{ margin: "0 0 6px" }}>Edges</h1>
           <div className="small">
-            Saved lines for <b>{event_id}</b> {year} RD{round}. Now showing DataGolf SG Total baseline.
+            Saved lines for <b>{event_id}</b> {year} RD{round}. v1 edges shown for <b>Strokes</b>.
           </div>
 
           {error && (
@@ -177,10 +173,9 @@ export default async function EdgesPage({
               ⚠ Supabase error: {error.message}
             </div>
           )}
-
           {dgRows.length === 0 && (
             <div className="small" style={{ marginTop: 8 }}>
-              ⚠ DataGolf skill ratings did not load. (Usually missing DATAGOLF_API_KEY or DG feed error.)
+              ⚠ DataGolf skill ratings did not load.
             </div>
           )}
         </div>
@@ -216,7 +211,10 @@ export default async function EdgesPage({
       </div>
 
       <div className="card" style={{ marginTop: 14 }}>
-        <div className="label">Saved Lines + DataGolf Skill (SG Total)</div>
+        <div className="label">Saved Lines + v1 Projection / Edge</div>
+        <div className="small" style={{ marginTop: 6 }}>
+          For now, Projection/Edge is only computed for <b>Strokes</b>. Next we’ll add this-week form and other markets.
+        </div>
 
         <div style={{ marginTop: 12, overflowX: "auto" }}>
           <table className="table">
@@ -228,12 +226,18 @@ export default async function EdgesPage({
                 <th>Tee</th>
                 <th>Line</th>
                 <th>DG SG Total</th>
+                <th>Proj (Strokes)</th>
+                <th>Edge (More)</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r, i) => {
                 const dg = dgByName.get(normName(r.player_name));
                 const sgTotal = dg ? toNum(dg.sg_total) : null;
+
+                const isStrokes = r.market.toLowerCase().includes("strokes");
+                const proj = isStrokes ? strokesProjFromSgTotal(sgTotal) : null;
+                const edgeMore = proj !== null ? proj - r.line : null;
 
                 return (
                   <tr key={i} id={r.market === rows[i - 1]?.market ? undefined : encodeURIComponent(r.market)}>
@@ -243,23 +247,21 @@ export default async function EdgesPage({
                     <td>{r.tee_time_local ?? "—"}</td>
                     <td>{r.line}</td>
                     <td>{sgTotal === null ? "—" : sgTotal.toFixed(3)}</td>
+                    <td>{proj === null ? "—" : proj.toFixed(2)}</td>
+                    <td>{edgeMore === null ? "—" : edgeMore.toFixed(2)}</td>
                   </tr>
                 );
               })}
 
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="small">
+                  <td colSpan={8} className="small">
                     No saved lines yet. Go to Home and paste+save a market board.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
-        </div>
-
-        <div className="small" style={{ marginTop: 10 }}>
-          Next: we’ll turn SG + this-week form into an actual projection + probability for each line.
         </div>
       </div>
     </div>
