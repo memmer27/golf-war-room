@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 type ParsedRow = {
   player: string;
   opponent?: string;
-  tee_time?: string;
+  tee_time?: string; // e.g. "Fri 6:21am"
   round?: number;
   line: number;
   market: string;
@@ -20,6 +20,11 @@ const MARKETS = [
   { key: 'Birdies or Better Matchup', label: 'Matchups (BoB)' }
 ];
 
+function safeNum(v: any, fallback: number) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export default function LinesPastePanel() {
   const [market, setMarket] = useState(MARKETS[0].key);
   const [raw, setRaw] = useState('');
@@ -33,8 +38,8 @@ export default function LinesPastePanel() {
   const [year, setYear] = useState<number>(new Date().getFullYear());
   const [round, setRound] = useState<number>(2);
 
-  const placeholder = useMemo(() => (
-`Paste one market board (all players) like:
+  const placeholder = useMemo(
+    () => `Paste one market board (all players) like:
 
 Michael Brennan
 Michael Brennan - G
@@ -46,14 +51,31 @@ Less
 More
 Trending
 241
-...`
-  ), []);
+...`,
+    []
+  );
+
+  function syncUrl(next?: { eventId?: string; year?: number; round?: number }) {
+    if (typeof window === 'undefined') return;
+    const e = next?.eventId ?? eventId;
+    const y = next?.year ?? year;
+    const r = next?.round ?? round;
+
+    const u = new URL(window.location.href);
+    u.searchParams.set('event_id', e);
+    u.searchParams.set('year', String(y));
+    u.searchParams.set('round', String(r));
+    window.history.replaceState({}, '', u.toString());
+  }
 
   async function parseAndSave() {
     setLoading(true);
     setErrors([]);
     setStatus('');
     try {
+      // Keep URL in sync so AvailableMarkets can load counts without manual URL edits
+      syncUrl();
+
       // 1) Parse
       const res = await fetch('/api/lines/parse', {
         method: 'POST',
@@ -90,6 +112,9 @@ Trending
       if (!saveRes.ok) throw new Error(saveJson?.error ?? 'Save failed');
 
       setStatus(`✅ Saved ${saveJson.saved ?? parsedRows.length} rows for ${eventId} ${year} RD${round} (${market}).`);
+
+      // Sync URL again (no harm) and allow AvailableMarkets to refresh on reload instantly
+      syncUrl();
     } catch (e: any) {
       setStatus('');
       setErrors([String(e?.message ?? e)]);
@@ -108,6 +133,7 @@ Trending
             className="input"
             value={eventId}
             onChange={(e) => setEventId(e.target.value)}
+            onBlur={() => syncUrl()}
             placeholder="cognizant"
           />
           <div className="small">We’ll replace this with the Event dropdown soon.</div>
@@ -119,13 +145,22 @@ Trending
             className="input"
             type="number"
             value={year}
-            onChange={(e) => setYear(Number(e.target.value))}
+            onChange={(e) => setYear(safeNum(e.target.value, new Date().getFullYear()))}
+            onBlur={() => syncUrl()}
           />
         </div>
 
         <div style={{ width: 120 }}>
           <div className="label">Round</div>
-          <select className="input" value={String(round)} onChange={(e) => setRound(Number(e.target.value))}>
+          <select
+            className="input"
+            value={String(round)}
+            onChange={(e) => {
+              const nextRound = safeNum(e.target.value, 2);
+              setRound(nextRound);
+              syncUrl({ round: nextRound });
+            }}
+          >
             <option value="1">RD1</option>
             <option value="2">RD2</option>
             <option value="3">RD3</option>
@@ -157,6 +192,7 @@ Trending
               setRows([]);
               setErrors([]);
               setStatus('');
+              syncUrl();
             }}
           >
             Clear
