@@ -11,15 +11,85 @@ type LineRow = {
   round: number;
 };
 
-type DGSkillRow = {
-  player_name?: string;
-  name?: string;
-  sg_total?: string;
-  [k: string]: string | undefined;
-};
+type DGSkillRow = Record<string, string>;
+
+function parseCSV(text: string): { headers: string[]; rows: string[][] } {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+
+  const pushField = () => {
+    row.push(field);
+    field = "";
+  };
+
+  const pushRow = () => {
+    // ignore totally empty trailing rows
+    if (row.length === 1 && row[0] === "") return;
+    rows.push(row);
+    row = [];
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+
+    if (inQuotes) {
+      if (c === '"') {
+        // escaped quote "" inside quoted field
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += c;
+      }
+      continue;
+    }
+
+    if (c === '"') {
+      inQuotes = true;
+      continue;
+    }
+
+    if (c === ",") {
+      pushField();
+      continue;
+    }
+
+    if (c === "\n") {
+      pushField();
+      pushRow();
+      continue;
+    }
+
+    if (c === "\r") {
+      continue;
+    }
+
+    field += c;
+  }
+
+  // flush last field/row
+  pushField();
+  pushRow();
+
+  const headers = (rows.shift() ?? []).map((h) => h.trim());
+  return { headers, rows };
+}
 
 function normName(s: string) {
-  return (s || "")
+  let x = (s || "").trim();
+
+  // Convert "Last, First" -> "First Last"
+  if (x.includes(",")) {
+    const [last, first] = x.split(",").map((p) => p.trim());
+    if (first && last) x = `${first} ${last}`;
+  }
+
+  return x
     .toLowerCase()
     .replace(/\./g, "")
     .replace(/\s+/g, " ")
@@ -43,16 +113,14 @@ async function fetchDGSkillRatings(): Promise<DGSkillRow[]> {
   if (!res.ok) return [];
 
   const text = await res.text();
-  const lines = text.split(/\r?\n/).filter(Boolean);
-  if (lines.length < 2) return [];
+  const { headers, rows } = parseCSV(text);
 
-  const headers = lines[0].split(",").map((h) => h.trim());
+  if (!headers.length || rows.length === 0) return [];
 
-  return lines.slice(1).map((line) => {
-    const cols = line.split(",").map((c) => c.trim());
+  return rows.map((cols) => {
     const obj: Record<string, string> = {};
-    headers.forEach((h, i) => (obj[h] = cols[i] ?? ""));
-    return obj as DGSkillRow;
+    headers.forEach((h, i) => (obj[h] = (cols[i] ?? "").trim()));
+    return obj;
   });
 }
 
@@ -84,8 +152,10 @@ export default async function EdgesPage({
 
   const rows: LineRow[] = (data ?? []) as LineRow[];
 
+  // Build lookup by normalized player name
   const dgByName = new Map<string, DGSkillRow>();
   for (const r of dgRows) {
+    // DG feed header is typically "player_name"
     const name = r.player_name || r.name || "";
     if (!name) continue;
     dgByName.set(normName(name), r);
