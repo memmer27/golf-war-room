@@ -26,15 +26,35 @@ export default function LinesPastePanel() {
   const [rows, setRows] = useState<ParsedRow[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<string>('');
+
+  // Temporary manual keys (we'll wire event dropdown later)
+  const [eventId, setEventId] = useState('cognizant');
+  const [year, setYear] = useState<number>(new Date().getFullYear());
+  const [round, setRound] = useState<number>(2);
 
   const placeholder = useMemo(() => (
-`Paste one market board (all players) like:\n\nMichael Brennan\nMichael Brennan - G\nMichael Brennan\nvs PGA National Golf Club Champion Course RD 2 Fri 6:21am\n70.5\nStrokes\nLess\nMore\n...`
+`Paste one market board (all players) like:
+
+Michael Brennan
+Michael Brennan - G
+Michael Brennan
+vs PGA National Golf Club Champion Course RD 2 Fri 6:21am
+70.5
+Strokes
+Less
+More
+Trending
+241
+...`
   ), []);
 
-  async function parse() {
+  async function parseAndSave() {
     setLoading(true);
     setErrors([]);
+    setStatus('');
     try {
+      // 1) Parse
       const res = await fetch('/api/lines/parse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -42,9 +62,36 @@ export default function LinesPastePanel() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? 'Parse failed');
-      setRows(json.rows ?? []);
+
+      const parsedRows: ParsedRow[] = json.rows ?? [];
+      setRows(parsedRows);
       setErrors(json.unparsed ?? []);
+
+      if (parsedRows.length === 0) {
+        setStatus('No rows parsed (nothing to save).');
+        return;
+      }
+
+      // 2) Save to Supabase (server-side)
+      const saveRes = await fetch('/api/lines/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_id: eventId,
+          year,
+          round,
+          market,
+          rows: parsedRows,
+          source: 'prizepicks'
+        })
+      });
+
+      const saveJson = await saveRes.json();
+      if (!saveRes.ok) throw new Error(saveJson?.error ?? 'Save failed');
+
+      setStatus(`✅ Saved ${saveJson.saved ?? parsedRows.length} rows for ${eventId} ${year} RD${round} (${market}).`);
     } catch (e: any) {
+      setStatus('');
       setErrors([String(e?.message ?? e)]);
     } finally {
       setLoading(false);
@@ -52,19 +99,66 @@ export default function LinesPastePanel() {
   }
 
   return (
-    <div style={{marginTop:12}}>
-      <div className="row">
-        <div style={{flex:1, minWidth:240}}>
-          <div className="label">Market</div>
-          <select className="input" value={market} onChange={(e) => setMarket(e.target.value)}>
-            {MARKETS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+    <div style={{ marginTop: 12 }}>
+      {/* Event/Year/Round (temporary manual inputs) */}
+      <div className="row" style={{ marginBottom: 10 }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div className="label">Event ID (temp)</div>
+          <input
+            className="input"
+            value={eventId}
+            onChange={(e) => setEventId(e.target.value)}
+            placeholder="cognizant"
+          />
+          <div className="small">We’ll replace this with the Event dropdown soon.</div>
+        </div>
+
+        <div style={{ width: 140 }}>
+          <div className="label">Year</div>
+          <input
+            className="input"
+            type="number"
+            value={year}
+            onChange={(e) => setYear(Number(e.target.value))}
+          />
+        </div>
+
+        <div style={{ width: 120 }}>
+          <div className="label">Round</div>
+          <select className="input" value={String(round)} onChange={(e) => setRound(Number(e.target.value))}>
+            <option value="1">RD1</option>
+            <option value="2">RD2</option>
+            <option value="3">RD3</option>
+            <option value="4">RD4</option>
           </select>
         </div>
-        <div style={{display:'flex', alignItems:'flex-end', gap:8}}>
-          <button className="btn btnPrimary" onClick={parse} disabled={loading || !raw.trim()}>
-            {loading ? 'Parsing…' : 'Parse & Preview'}
+      </div>
+
+      {/* Market + Buttons */}
+      <div className="row">
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div className="label">Market</div>
+          <select className="input" value={market} onChange={(e) => setMarket(e.target.value)}>
+            {MARKETS.map((m) => (
+              <option key={m.key} value={m.key}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+          <button className="btn btnPrimary" onClick={parseAndSave} disabled={loading || !raw.trim()}>
+            {loading ? 'Working…' : 'Parse & Save'}
           </button>
-          <button className="btn" onClick={() => { setRaw(''); setRows([]); setErrors([]); }}>
+          <button
+            className="btn"
+            onClick={() => {
+              setRaw('');
+              setRows([]);
+              setErrors([]);
+              setStatus('');
+            }}
+          >
             Clear
           </button>
         </div>
@@ -73,14 +167,20 @@ export default function LinesPastePanel() {
       <div className="label">Paste board text</div>
       <textarea
         className="input"
-        style={{minHeight:180, fontFamily:'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'}}
+        style={{ minHeight: 180, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}
         value={raw}
         onChange={(e) => setRaw(e.target.value)}
         placeholder={placeholder}
       />
 
+      {status && (
+        <div style={{ marginTop: 10 }} className="small">
+          {status}
+        </div>
+      )}
+
       {rows.length > 0 && (
-        <div style={{marginTop:14}}>
+        <div style={{ marginTop: 14 }}>
           <div className="label">Parsed rows ({rows.length})</div>
           <table className="table">
             <thead>
@@ -108,23 +208,23 @@ export default function LinesPastePanel() {
           </table>
 
           {errors.length > 0 && (
-            <div style={{marginTop:12}}>
+            <div style={{ marginTop: 12 }}>
               <div className="label">Unparsed / warnings</div>
               <ul className="small">
-                {errors.slice(0, 12).map((x, idx) => <li key={idx}>{x}</li>)}
+                {errors.slice(0, 12).map((x, idx) => (
+                  <li key={idx}>{x}</li>
+                ))}
               </ul>
             </div>
           )}
-
-          <div className="small" style={{marginTop:10}}>
-            Next step (v1): Save parsed rows to Supabase keyed by event_id/year/round/market.
-          </div>
         </div>
       )}
 
       {rows.length === 0 && errors.length > 0 && (
-        <div style={{marginTop:12}} className="small">
-          {errors.map((x, i) => <div key={i}>⚠ {x}</div>)}
+        <div style={{ marginTop: 12 }} className="small">
+          {errors.map((x, i) => (
+            <div key={i}>⚠ {x}</div>
+          ))}
         </div>
       )}
     </div>
