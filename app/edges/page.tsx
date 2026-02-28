@@ -11,7 +11,12 @@ type LineRow = {
   round: number;
 };
 
-type DGSkillRow = Record<string, string>;
+type DGSkillRow = {
+  player_name?: string;
+  name?: string;
+  sg_total?: string;
+  [k: string]: string | undefined;
+};
 
 function normName(s: string) {
   return (s || "")
@@ -24,6 +29,31 @@ function normName(s: string) {
 function toNum(x: any): number | null {
   const n = Number(x);
   return Number.isFinite(n) ? n : null;
+}
+
+async function fetchDGSkillRatings(): Promise<DGSkillRow[]> {
+  const key = process.env.DATAGOLF_API_KEY;
+  if (!key) return [];
+
+  const url = `https://feeds.datagolf.com/preds/skill-ratings?tour=pga&file_format=csv&key=${encodeURIComponent(
+    key
+  )}`;
+
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) return [];
+
+  const text = await res.text();
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  if (lines.length < 2) return [];
+
+  const headers = lines[0].split(",").map((h) => h.trim());
+
+  return lines.slice(1).map((line) => {
+    const cols = line.split(",").map((c) => c.trim());
+    const obj: Record<string, string> = {};
+    headers.forEach((h, i) => (obj[h] = cols[i] ?? ""));
+    return obj as DGSkillRow;
+  });
 }
 
 export default async function EdgesPage({
@@ -39,7 +69,7 @@ export default async function EdgesPage({
   const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
   const supabase = createClient(supabaseUrl, supabaseAnon);
 
-  const [{ data, error }, dgRes] = await Promise.all([
+  const [{ data, error }, dgRows] = await Promise.all([
     supabase
       .from("lines")
       .select("player_name, opponent_name, tee_time_local, line, market, round")
@@ -49,22 +79,11 @@ export default async function EdgesPage({
       .order("market", { ascending: true })
       .order("tee_time_local", { ascending: true })
       .order("player_name", { ascending: true }),
-    fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? ""}/api/dg/skill-ratings`, { cache: "no-store" }).catch(() => null),
+    fetchDGSkillRatings(),
   ]);
 
   const rows: LineRow[] = (data ?? []) as LineRow[];
 
-  // Load DG skill ratings (server-side). If base URL isn't set, fall back to relative fetch.
-  let dgRows: DGSkillRow[] = [];
-  try {
-    const dg = dgRes ?? (await fetch(`http://localhost:3000/api/dg/skill-ratings`, { cache: "no-store" }));
-    const dgJson = await dg.json();
-    dgRows = (dgJson?.rows ?? []) as DGSkillRow[];
-  } catch {
-    dgRows = [];
-  }
-
-  // Build lookup by normalized player_name
   const dgByName = new Map<string, DGSkillRow>();
   for (const r of dgRows) {
     const name = r.player_name || r.name || "";
@@ -80,16 +99,18 @@ export default async function EdgesPage({
         <div>
           <h1 style={{ margin: "0 0 6px" }}>Edges</h1>
           <div className="small">
-            Saved lines for <b>{event_id}</b> {year} RD{round}. Next step: convert SG into prop projections + hit rates.
+            Saved lines for <b>{event_id}</b> {year} RD{round}. Now showing DataGolf SG Total baseline.
           </div>
+
           {error && (
             <div className="small" style={{ marginTop: 8 }}>
               ⚠ Supabase error: {error.message}
             </div>
           )}
+
           {dgRows.length === 0 && (
             <div className="small" style={{ marginTop: 8 }}>
-              ⚠ DataGolf skill ratings not loaded yet. (We’ll fix base URL next.)
+              ⚠ DataGolf skill ratings did not load. (Usually missing DATAGOLF_API_KEY or DG feed error.)
             </div>
           )}
         </div>
@@ -126,9 +147,6 @@ export default async function EdgesPage({
 
       <div className="card" style={{ marginTop: 14 }}>
         <div className="label">Saved Lines + DataGolf Skill (SG Total)</div>
-        <div className="small" style={{ marginTop: 6 }}>
-          SG Total here is a baseline “player strength” input. Next we’ll build actual prop projections and an Edge score.
-        </div>
 
         <div style={{ marginTop: 12, overflowX: "auto" }}>
           <table className="table">
@@ -158,6 +176,7 @@ export default async function EdgesPage({
                   </tr>
                 );
               })}
+
               {rows.length === 0 && (
                 <tr>
                   <td colSpan={6} className="small">
@@ -167,6 +186,10 @@ export default async function EdgesPage({
               )}
             </tbody>
           </table>
+        </div>
+
+        <div className="small" style={{ marginTop: 10 }}>
+          Next: we’ll turn SG + this-week form into an actual projection + probability for each line.
         </div>
       </div>
     </div>
