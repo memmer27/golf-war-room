@@ -46,7 +46,7 @@ export async function POST(req: Request) {
       round,
       market,
       player_name: r.player,
-      opponent_name: r.opponent ?? null,
+      opponent_name: r.opponent ?? '',
       tee_time_local: r.tee_time ?? null,
       line: r.line,
       source,
